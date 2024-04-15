@@ -12,22 +12,18 @@ import logging
 
 CACHE_FILE = "cache.pkl"
 
-
 def readCache():
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, "rb") as f:
             return pickle.load(f)
     return {}
 
-
 def writeCache(cache):
     with open(CACHE_FILE, "wb") as f:
         pickle.dump(cache, f)
 
-
 def prettyPrintJson(data):
     print(json.dumps(data, indent=4, ensure_ascii=False))
-
 
 def makeHttpRequest(host, path, redirectCount=0, maxRedirects=5):
     cache = readCache()
@@ -51,11 +47,14 @@ def makeHttpRequest(host, path, redirectCount=0, maxRedirects=5):
                     break
                 response += data
         responseStr = response.decode("utf-8", errors="ignore")
-        responseLines = responseStr.split("\r\n")
+        responseLines = responseStr.split("\r\n\r\n", 1)
+
+        headers = responseLines[0].split("\r\n")
+        body = responseLines[1] if len(responseLines) > 1 else ""
 
         # Handling redirects
-        if "HTTP/1.1 3" in responseLines[0] and redirectCount < maxRedirects:
-            for line in responseLines:
+        if "HTTP/1.1 3" in headers[0] and redirectCount < maxRedirects:
+            for line in headers:
                 if line.startswith("Location:"):
                     newLocation = line.split(": ", 1)[1]
                     newUrl = urlparse(newLocation)
@@ -67,22 +66,32 @@ def makeHttpRequest(host, path, redirectCount=0, maxRedirects=5):
                         newPath = '/'
                     return makeHttpRequest(newHost, newPath, redirectCount + 1, maxRedirects)
 
-        soup = BeautifulSoup(response, 'html.parser')
-        links = [a['href'] for a in soup.find_all('a', href=True) if 'http' in a['href']]
+        contentType = next((line.split(": ", 1)[1].strip() for line in headers if line.lower().startswith("content-type:")), "")
 
-        # Saving only essential data
-        essential_data = {
-            'links': links,
-            'text': soup.get_text(strip=True)[:100]  # Sample of response text for brevity
-        }
+        if "application/json" in contentType:
+            jsonData = json.loads(body)
+            prettyPrintJson(jsonData)
+            cache[cache_key] = jsonData
+            writeCache(cache)
+            return jsonData
+        else:
+            soup = BeautifulSoup(body, 'html.parser')
+            links = [a['href'] for a in soup.find_all('a', href=True) if 'http' in a['href']]
 
-        cache[cache_key] = essential_data
-        writeCache(cache)
-        prettyPrintJson(essential_data)
-        return essential_data
+            # Saving only essential data
+            essential_data = {
+                'links': links,
+                'text': soup.get_text(strip=True)[:100]  # Sample of response text for brevity
+            }
+
+            cache[cache_key] = essential_data
+            writeCache(cache)
+            prettyPrintJson(essential_data)
+            return essential_data
     except Exception as e:
         logging.error("Failed to make HTTP request", exc_info=True)
         return None
+
 
 def searchWithGoogle(searchTerm, cache):
     cache_key = f"search_{searchTerm}"
